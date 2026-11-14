@@ -30,7 +30,7 @@ import json
 import os
 import sys
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 GPU_MODEL = "medium"
 CPU_MODEL = "small"
@@ -122,7 +122,8 @@ def split_words(words: list, max_words: int) -> list:
 
 def _join(words: list) -> dict:
     text = "".join(w[2] for w in words).strip()
-    return {"start": round(words[0][0], 2), "end": round(words[-1][1], 2), "text": text}
+    # float(): word timings arrive as numpy floats, which leak into reprs and some serializers
+    return {"start": round(float(words[0][0]), 2), "end": round(float(words[-1][1]), 2), "text": text}
 
 
 def progress_percent(position: float, duration: float) -> int:
@@ -232,7 +233,7 @@ def _run(path, device, compute, model_name, language, max_words, vad, vad_parame
         if max_words > 0 and segment.words:
             pieces = split_words([(w.start, w.end, w.word) for w in segment.words], max_words)
         else:
-            pieces = [{"start": round(segment.start, 2), "end": round(segment.end, 2), "text": segment.text.strip()}]
+            pieces = [{"start": round(float(segment.start), 2), "end": round(float(segment.end), 2), "text": segment.text.strip()}]
         segments.extend({**piece, "text": convert(piece["text"])} for piece in pieces if piece["text"])
 
         percent = progress_percent(segment.end, info.duration)

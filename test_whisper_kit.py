@@ -52,6 +52,17 @@ class SplitWordsTest(unittest.TestCase):
         self.assertEqual(words, before)
 
 
+class PlainFloatTest(unittest.TestCase):
+    def test_timings_come_back_as_plain_floats_even_from_float_subclasses(self):
+        class NumpyLike(float):
+            pass
+
+        piece = kit.split_words([(NumpyLike(0.0), NumpyLike(1.234), " hi.")], 30)[0]
+        self.assertIs(type(piece["start"]), float)
+        self.assertIs(type(piece["end"]), float)
+        self.assertEqual(piece["end"], 1.23)
+
+
 class HelpersTest(unittest.TestCase):
     def test_progress_never_reaches_100_and_survives_bad_durations(self):
         self.assertEqual(kit.progress_percent(30, 120), 25)
