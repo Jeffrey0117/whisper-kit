@@ -1,0 +1,13 @@
+{
+  "note": "kit-kit audit 拿這份去掃每個用到 whisper-kit 的專案。pattern 逐行比對，找到就算違反；files 是比對相對路徑的 regex。規則的理由在 SKILL.md「地雷」。",
+  "checks": [
+    {
+      "id": "handwritten-whisper-model",
+      "rule": "專案已經用了 whisper-kit，卻還有地方自己建 WhisperModel",
+      "fix": "改呼叫 whisper_kit.transcribe()（Node 用 createWhisper().transcribe），顯卡退回、DLL 路徑、進度才會一致",
+      "pattern": "\\bWhisperModel\\(",
+      "files": "^(?!.*(?:^|/)(?:whisper_kit|test_whisper_kit)\\.py$)(?!.*(?:^|/)(?:tests?|benchmarks?|scripts)/)(?!.*(?:^|/)(?:benchmark|check)_[^/]*\\.py$).*\\.py$",
+      "severity": "warn"
+    }
+  ]
+}

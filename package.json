@@ -4,9 +4,26 @@
   "description": "本機語音辨識（faster-whisper）：影片/音檔 → 帶時間的逐字稿。顯卡優先、失敗退回 CPU、即時進度、斷句、中文轉台灣繁體、非預期語言防呆。Python 模組 + CLI + Node 包裝，不花錢。",
   "main": "index.js",
   "scripts": {
-    "example": "node example.js"
+    "example": "node example.js",
+    "test": "node --test \"test/*.test.js\" && python -m unittest"
   },
-  "keywords": [],
+  "keywords": [
+    "whisper",
+    "faster-whisper",
+    "speech-to-text",
+    "transcription",
+    "subtitles",
+    "asr"
+  ],
   "author": "Jeffrey0117",
-  "license": "MIT"
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "whisper_kit.py",
+    "requirements.txt",
+    "README.md",
+    "SKILL.md",
+    "kit-checks.json",
+    "LICENSE"
+  ]
 }
