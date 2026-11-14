@@ -30,7 +30,7 @@ import json
 import os
 import sys
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 GPU_MODEL = "medium"
 CPU_MODEL = "small"
@@ -180,6 +180,7 @@ def transcribe(
     vad: bool = True,
     vad_parameters: dict = None,
     traditional_chinese: bool = True,
+    include_words: bool = False,
     on_progress=None,
 ) -> dict:
     """Transcribe an audio or video file.
@@ -189,6 +190,8 @@ def transcribe(
                     confidently something else. Pinning "en" on non-English audio makes Whisper
                     invent fluent fake English, so services that pin should guard.
     max_words       > 0: return sentence-sized segments (needs word timestamps, a little slower)
+    include_words   attach each segment's word timings ("words": [{word, start, end, probability}])
+                    for callers that do their own splitting; segments are then left whole
     on_progress     called with an int 0-99 as decoding advances
     """
     if not os.path.exists(path):
@@ -207,8 +210,9 @@ def transcribe(
     last_error = None
     for dev, compute, model_name in plan_attempts(model, device, compute_type):
         try:
-            return _run(path, dev, compute, model_name, language, max_words, vad, vad_parameters,
-                        traditional_chinese, on_progress)
+            return _run(path, dev, compute, model_name, language=language, max_words=max_words, vad=vad,
+                        vad_parameters=vad_parameters, traditional_chinese=traditional_chinese,
+                        on_progress=on_progress, include_words=include_words)
         except Exception as error:
             # A GPU can fail at load or only once decoding starts (missing CUDA library, out of
             # memory), so the whole attempt is retried on the next device, not just the load.
@@ -218,10 +222,16 @@ def transcribe(
     raise RuntimeError(f"transcription failed on every device: {last_error}")
 
 
-def _run(path, device, compute, model_name, language, max_words, vad, vad_parameters,
-         traditional_chinese, on_progress) -> dict:
+def _word_dicts(words) -> list:
+    return [{"word": w.word, "start": round(float(w.start), 2), "end": round(float(w.end), 2),
+             "probability": round(float(getattr(w, "probability", 1.0)), 3)} for w in (words or [])]
+
+
+def _run(path, device, compute, model_name, *, language, max_words, vad, vad_parameters,
+         traditional_chinese, on_progress, include_words) -> dict:
     model = load_model(model_name, device, compute)
-    options = {"language": language or None, "vad_filter": vad, "word_timestamps": max_words > 0}
+    options = {"language": language or None, "vad_filter": vad,
+               "word_timestamps": max_words > 0 or include_words}
     if vad and vad_parameters:
         options["vad_parameters"] = vad_parameters
     segments_iter, info = model.transcribe(path, **options)
@@ -230,7 +240,10 @@ def _run(path, device, compute, model_name, language, max_words, vad, vad_parame
     segments = []
     last_percent = -1
     for segment in segments_iter:  # decoding happens here, lazily
-        if max_words > 0 and segment.words:
+        if include_words:
+            pieces = [{"start": round(float(segment.start), 2), "end": round(float(segment.end), 2),
+                       "text": segment.text.strip(), "words": _word_dicts(segment.words)}]
+        elif max_words > 0 and segment.words:
             pieces = split_words([(w.start, w.end, w.word) for w in segment.words], max_words)
         else:
             pieces = [{"start": round(float(segment.start), 2), "end": round(float(segment.end), 2), "text": segment.text.strip()}]

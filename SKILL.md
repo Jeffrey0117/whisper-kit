@@ -33,6 +33,8 @@ const result = await whisper.transcribe(file, { onProgress })
 
 複製 `whisper_kit.py` 進專案，`from whisper_kit import transcribe`。模型會留在行程裡。
 
+**專案已經有自己的斷句**（AutoReel 這種）：`transcribe(..., include_words=True)`，每段帶逐字時間，照原本的方式切；只把載模型、顯卡、退回 CPU 交給 kit。
+
 **既有腳本要相容舊格式**：`python whisper_kit.py file --json` 印出的就是 plottr `transcribe.py` 一直以來的那個 JSON（`language` / `text` / `segments` / `word_count`）。
 
 ## 模式

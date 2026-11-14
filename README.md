@@ -76,6 +76,8 @@ except UnexpectedLanguageError as error:
 
 模型會留在行程裡，第二次呼叫不用重新載入。
 
+已經有自己的斷句邏輯？用 `include_words=True`：每段附上 `words`（`word` / `start` / `end` / `probability`），段落本身不切，交給你切。
+
 ## 指令
 
 ```bash
@@ -98,7 +100,7 @@ python whisper_kit.py lesson.mp4 --language en --guard-language --max-words 30
 ## 測試
 
 ```bash
-python -m unittest                  # 22 個，不需要模型
+python -m unittest                  # 26 個，不需要模型
 node --test "test/*.test.js"        # 6 個，用假腳本代替 Python
 node example.js <影片或音檔>         # 真的跑一次
 ```

@@ -52,6 +52,66 @@ class SplitWordsTest(unittest.TestCase):
         self.assertEqual(words, before)
 
 
+class RunTest(unittest.TestCase):
+    """_run() against a fake model: what each option does to the output."""
+
+    class Word:
+        def __init__(self, start, end, word, probability=0.9):
+            self.start, self.end, self.word, self.probability = start, end, word, probability
+
+    class Seg:
+        def __init__(self, start, end, text, words=None):
+            self.start, self.end, self.text, self.words = start, end, text, words
+
+    class Info:
+        language, language_probability, duration = "en", 0.98, 10.0
+
+    def run_kit(self, segments, **options):
+        seen = {}
+
+        class FakeModel:
+            def transcribe(_, path, **kwargs):
+                seen.update(kwargs)
+                return iter(segments), RunTest.Info()
+
+        defaults = dict(language="", max_words=0, vad=True, vad_parameters=None,
+                        traditional_chinese=True, on_progress=None, include_words=False)
+        with mock.patch.object(kit, "load_model", return_value=FakeModel()):
+            result = kit._run("a.mp4", "cpu", "int8", "small", **{**defaults, **options})
+        return result, seen
+
+    def segments(self):
+        W = self.Word
+        return [self.Seg(0.0, 2.0, " Hello there.", [W(0.0, 1.0, " Hello"), W(1.0, 2.0, " there.", 0.5)]),
+                self.Seg(5.0, 6.0, " Bye.", None)]
+
+    def test_plain_run_reports_progress_and_asks_for_no_word_timings(self):
+        seen_progress = []
+        result, asked = self.run_kit(self.segments(), on_progress=seen_progress.append)
+        self.assertEqual(result["segments"], [{"start": 0.0, "end": 2.0, "text": "Hello there."},
+                                              {"start": 5.0, "end": 6.0, "text": "Bye."}])
+        self.assertEqual(seen_progress, [20, 60])
+        self.assertFalse(asked["word_timestamps"])
+        self.assertEqual((result["device"], result["model"], result["language"]), ("cpu", "small", "en"))
+
+    def test_include_words_keeps_segments_whole_and_attaches_word_timings(self):
+        result, asked = self.run_kit(self.segments(), include_words=True)
+        self.assertTrue(asked["word_timestamps"])
+        first, second = result["segments"]
+        self.assertEqual(first["text"], "Hello there.")
+        self.assertEqual(first["words"], [
+            {"word": " Hello", "start": 0.0, "end": 1.0, "probability": 0.9},
+            {"word": " there.", "start": 1.0, "end": 2.0, "probability": 0.5},
+        ])
+        self.assertEqual(second["words"], [])
+
+    def test_max_words_splits_and_can_be_combined_with_vad_parameters(self):
+        result, asked = self.run_kit(self.segments(), max_words=1, vad_parameters={"min_silence_duration_ms": 500})
+        self.assertEqual([s["text"] for s in result["segments"]], ["Hello", "there.", "Bye."])
+        self.assertEqual(asked["vad_parameters"], {"min_silence_duration_ms": 500})
+        self.assertNotIn("vad_parameters", self.run_kit(self.segments(), vad=False, vad_parameters={"x": 1})[1])
+
+
 class PlainFloatTest(unittest.TestCase):
     def test_timings_come_back_as_plain_floats_even_from_float_subclasses(self):
         class NumpyLike(float):
@@ -95,7 +155,7 @@ class TranscribeControlFlowTest(unittest.TestCase):
     def test_falls_back_to_cpu_when_the_gpu_fails_mid_run(self):
         calls = []
 
-        def fake_run(path, device, *rest):
+        def fake_run(path, device, *rest, **options):
             calls.append(device)
             if device == "cuda":
                 raise RuntimeError("cublas64_12.dll is not found")
