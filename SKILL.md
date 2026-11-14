@@ -43,7 +43,11 @@ const result = await whisper.transcribe(file, { onProgress })
 - **只需要音訊**。來源是 YouTube 就只下載音軌（`yt-dlp -f ba`），不要為了辨識抓整支影片。
 - **模型怎麼選**：英文內容用 `distil-large-v3`（快、準，但**只會英文**）；多語言或不確定就 `medium`；CPU 上用 `small`。中文用 `base` 很爛，至少 `medium`。
 - **要不要鎖語言**：內容確定是單一語言才鎖，而且鎖了就開 `guard_language`。不確定就留空讓它偵測。
-- **要不要切句**（`maxWords`）：給人讀、要逐句翻譯、要當字幕 → 切（30 左右）。只是要全文 → 不切，比較快。
+- **怎麼切段**，三選一：
+  - 要**燒進影片的字幕** → `cues: true`。依真實停頓切，一條最多 3.5 秒 / 12 個詞，時間準到字。短影音用這個。
+  - 要**給人讀、逐句翻譯** → `maxWords: 30`。只在句尾切，句子完整。學習平台用這個。
+  - 只要全文 → 都不設，最快。
+  （Node 包裝目前只接了 `maxWords`；`cues` 請用 Python 或指令的 `--cues`。）
 - **有 YouTube 字幕時先用字幕**，語音辨識當備案或「字幕太爛」時的替代。作者上傳的字幕通常比辨識好；自動產生的通常比辨識差（沒標點）。
 
 ## 地雷
@@ -51,6 +55,7 @@ const result = await whisper.transcribe(file, { onProgress })
 - **`cublas64_12.dll is not found`**：pip 裝的 nvidia 套件把 DLL 放在 `site-packages/nvidia/*/bin`，Windows 不會去那裡找。kit 會自己處理；手寫版要記得加 PATH。而且這個錯**在開始解碼時才出現**，模型載入是成功的——所以「載入失敗才退回 CPU」的寫法擋不住。
 - **鎖 `language="en"` 丟非英文的片**：Whisper 不會報錯，會編出通順的假英文。ReelScript 中過。
 - **`distil-large-v3` 的語言偵測永遠回 `en`**（它是純英文蒸餾模型），不能拿它判斷語言。kit 的防呆另外用多語言的 `tiny`。
+- **RTX 50 系列顯卡用 `int8` 可能丟 `CUBLAS_STATUS_NOT_SUPPORTED`**（AutoReel 踩過），要 `float16`。kit 顯卡預設就是 float16；專案設定檔裡寫死 `compute_type: int8` 又開顯卡的要留意——失敗時 kit 會退回 CPU，不會整個掛掉，但等於白開顯卡。
 - **用 `torch.cuda.is_available()` 判斷有沒有顯卡**：專案沒裝 torch 就永遠是 CPU，而 faster-whisper 根本不需要 torch。用 `device: 'auto'`。
 - **Windows 上 Python 的 stdout 不是 UTF-8**：中文會變亂碼或直接丟例外。Node 包裝已設 `PYTHONIOENCODING=utf-8`；自己 spawn 要記得設。
 - **進度到 99 就停**：kit 故意不報 100，由呼叫端在存好結果後標完成，避免「顯示完成但資料還沒寫入」。

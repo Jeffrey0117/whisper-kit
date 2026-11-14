@@ -13,7 +13,9 @@
 | 顯卡優先，失敗退回 CPU——包含「模型載得起來、開始解碼才失敗」的情況 | cutube |
 | 自動找到 pip 的 `nvidia-cublas` / `nvidia-cudnn` DLL（Windows 預設找不到，症狀是 `cublas64_12.dll is not found`） | cutube |
 | 邊跑邊回報進度 | cutube |
-| 依標點與字數上限切成句子大小的段落 | ReelScript / AutoReel |
+| 依標點與字數上限切成句子大小的段落（`max_words`，給人讀的） | ReelScript |
+| 依真實停頓切成字幕 cue（`cues`，給燒字幕的）：停頓、句尾、逗號處切；太長才硬切，並把句尾的連接詞留給下一條 | AutoReel |
+| 每切出一段就回報（`on_segment`），可以邊辨識邊顯示 | AutoReel |
 | 鎖定語言時的防呆：音訊明顯是別的語言就拒絕（否則 Whisper 會編出流利的假英文） | ReelScript |
 | 中文轉台灣繁體（Whisper 預設出簡體） | plottr |
 | 模型留在記憶體，長駐服務只付一次載入時間 | ReelScript |
@@ -76,6 +78,8 @@ except UnexpectedLanguageError as error:
 
 模型會留在行程裡，第二次呼叫不用重新載入。
 
+要燒進影片的字幕用 `cues=True`（上限可用 `cue_options={"max_dur": 3.5, "max_words": 12, "gap_cut": 0.6, "min_dur": 0.5}` 調）；要傳 faster-whisper 自己的參數用 `decode_options={"beam_size": 5}`。
+
 已經有自己的斷句邏輯？用 `include_words=True`：每段附上 `words`（`word` / `start` / `end` / `probability`），段落本身不切，交給你切。
 
 ## 指令
@@ -93,18 +97,22 @@ python whisper_kit.py lesson.mp4 --language en --guard-language --max-words 30
 | `--compute-type` | 顯卡 `float16`、CPU `int8` | |
 | `--language` | 自動偵測 | |
 | `--guard-language` | 關 | 搭配 `--language`；被拒絕時 exit code 3，stdout 一行 `E <json>` |
-| `--max-words` | 0（不重切） | |
+| `--max-words` | 0（不重切） | 句子大小，給人讀 |
+| `--cues` | 關 | 字幕 cue，依停頓切 |
+| `--beam-size` | faster-whisper 預設 | |
 | `--no-vad` | | 不跳過靜音 |
 | `--keep-simplified` | | 中文不轉繁體 |
 
 ## 測試
 
 ```bash
-python -m unittest                  # 26 個，不需要模型
+python -m unittest                  # 39 個，不需要模型
 node --test "test/*.test.js"        # 6 個，用假腳本代替 Python
 node example.js <影片或音檔>         # 真的跑一次
 ```
 
 ## 實測（RTX 5060 8GB）
+
+`cues` 的切法從 AutoReel 的 `faster-whisper-srt.py` 搬過來時，新舊腳本對同一支音檔各跑一次：55 條 cue、文字完全相同、時間最多差 1ms。
 
 2 分 08 秒的英文教學片：顯卡 `medium` 約 23 秒，CPU `small` 約 42 秒（都含載入模型）。

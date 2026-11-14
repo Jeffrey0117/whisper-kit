@@ -120,7 +120,7 @@ class PlainFloatTest(unittest.TestCase):
         piece = kit.split_words([(NumpyLike(0.0), NumpyLike(1.234), " hi.")], 30)[0]
         self.assertIs(type(piece["start"]), float)
         self.assertIs(type(piece["end"]), float)
-        self.assertEqual(piece["end"], 1.23)
+        self.assertEqual(piece["end"], 1.234)  # millisecond precision
 
 
 class HelpersTest(unittest.TestCase):
@@ -241,6 +241,87 @@ class CliTest(unittest.TestCase):
         code, out, err = self.run_cli(["a.mp4"], side_effect=RuntimeError("boom"))
         self.assertEqual((code, out), (1, ""))
         self.assertIn("boom", err)
+
+
+class CueTest(unittest.TestCase):
+    """build_cues: subtitle cues cut where speech really pauses (ported from AutoReel's recognizer)."""
+
+    class W:
+        def __init__(self, start, end, word):
+            self.start, self.end, self.word = start, end, word
+
+    class Seg:
+        def __init__(self, words=None, start=0.0, end=0.0, text=""):
+            self.words, self.start, self.end, self.text = words, start, end, text
+
+    def words(self, *triples):
+        return [self.W(*t) for t in triples]
+
+    def cues(self, *segments, **options):
+        return list(kit.build_cues(iter(segments), **options))
+
+    def test_cuts_at_sentence_end_and_at_a_real_pause(self):
+        seg = self.Seg(self.words((0.0, 0.5, " Hello"), (0.5, 1.0, " there."), (1.1, 1.6, " How"), (1.6, 2.2, " are"),
+                                  (3.0, 3.6, " you"), (3.6, 4.2, " today")))
+        self.assertEqual(self.cues(seg), [(0.0, 1.0, "Hello there."), (1.1, 2.2, "How are"), (3.0, 4.2, "you today")])
+
+    def test_cues_run_across_segment_boundaries(self):
+        first = self.Seg(self.words((0.0, 0.5, " one"), (0.5, 1.0, " two")))
+        second = self.Seg(self.words((1.0, 1.5, " three."), (1.6, 2.4, " four")))
+        self.assertEqual(self.cues(first, second), [(0.0, 1.5, "one two three."), (1.6, 2.4, "four")])
+
+    def test_a_forced_cut_hands_trailing_connectors_to_the_next_cue(self):
+        triples = [(i * 0.3, i * 0.3 + 0.3, f" w{i}") for i in range(11)] + [(3.3, 3.6, " and"), (3.6, 3.9, " the"),
+                                                                              (3.9, 4.2, " end")]
+        result = self.cues(self.Seg(self.words(*triples)))
+        self.assertEqual(result[0][2], " ".join(f"w{i}" for i in range(11)))
+        self.assertEqual(result[1][2], "and the end")
+        self.assertAlmostEqual(result[1][0], 3.3)
+
+    def test_long_unpunctuated_speech_is_capped_by_word_count_and_duration(self):
+        many = self.Seg(self.words(*[(i * 0.1, i * 0.1 + 0.1, f" x{i}") for i in range(30)]))
+        self.assertTrue(all(len(text.split()) <= 12 for _, _, text in self.cues(many)))
+        slow = self.Seg(self.words(*[(i * 1.0, i * 1.0 + 0.9, f" y{i}") for i in range(8)]))
+        self.assertTrue(all(end - start <= 3.5 + 0.9 for start, end, _ in self.cues(slow)))
+        self.assertEqual(len(self.cues(many, max_words=5)), 6)
+
+    def test_a_very_short_cue_right_after_another_is_merged_back(self):
+        seg = self.Seg(self.words((0.0, 0.5, " Wait."), (0.55, 0.8, " No.")))
+        self.assertEqual(self.cues(seg), [(0.0, 0.8, "Wait. No.")])
+        apart = self.Seg(self.words((0.0, 0.5, " Wait."), (2.0, 2.2, " No.")))
+        self.assertEqual(len(self.cues(apart)), 2)
+
+    def test_a_segment_without_word_timings_becomes_one_cue_and_nothing_is_lost(self):
+        result = self.cues(self.Seg(self.words((0.0, 1.0, " Before"))), self.Seg(None, 2.0, 4.0, " whole segment "),
+                           self.Seg(self.words((5.0, 6.0, " After"))))
+        self.assertEqual([text for _, _, text in result], ["Before", "whole segment", "After"])
+
+    def test_empty_input(self):
+        self.assertEqual(self.cues(), [])
+        self.assertEqual(self.cues(self.Seg(None, 0, 1, "   ")), [])
+
+
+class RunOptionsTest(RunTest):
+    def test_cues_mode_uses_word_timings_and_reports_each_cue_as_it_appears(self):
+        seen = []
+        result, asked = self.run_kit(self.segments(), cues=True, on_segment=seen.append)
+        self.assertTrue(asked["word_timestamps"])
+        self.assertEqual([s["text"] for s in result["segments"]], ["Hello there.", "Bye."])
+        self.assertEqual(seen, result["segments"])
+        self.assertIs(type(result["segments"][0]["start"]), float)
+
+    def test_cue_options_and_decode_options_are_passed_through(self):
+        result, asked = self.run_kit(self.segments(), cues=True, cue_options={"max_words": 1},
+                                     decode_options={"beam_size": 5, "condition_on_previous_text": True})
+        self.assertEqual([s["text"] for s in result["segments"]], ["Hello", "there.", "Bye."])
+        self.assertEqual((asked["beam_size"], asked["condition_on_previous_text"]), (5, True))
+
+    def test_cli_flags(self):
+        with mock.patch.object(kit, "transcribe", return_value=CliTest.RESULT) as fake, redirect_stdout(io.StringIO()):
+            kit.main(["a.mp4", "--cues", "--beam-size", "5", "--json"])
+            self.assertEqual((fake.call_args.kwargs["cues"], fake.call_args.kwargs["decode_options"]), (True, {"beam_size": 5}))
+            kit.main(["a.mp4", "--json"])
+            self.assertEqual((fake.call_args.kwargs["cues"], fake.call_args.kwargs["decode_options"]), (False, None))
 
 
 if __name__ == "__main__":
