@@ -148,9 +148,29 @@ class TranscribeControlFlowTest(unittest.TestCase):
     """transcribe() with the model work mocked out: fallback and the language guard."""
 
     def setUp(self):
-        patcher = mock.patch("os.path.exists", return_value=True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for patcher in (mock.patch("os.path.exists", return_value=True),
+                        mock.patch.object(kit, "gpu_survives", return_value=True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_a_gpu_that_crashes_the_process_is_skipped_without_being_touched(self):
+        calls = []
+
+        def fake_run(path, device, *rest, **options):
+            calls.append(device)
+            return {"device": device}
+
+        with mock.patch.object(kit, "_run", fake_run), redirect_stderr(io.StringIO()) as err:
+            with mock.patch.object(kit, "gpu_survives", return_value=False):
+                self.assertEqual(kit.transcribe("x.mp4"), {"device": "cpu"})
+        self.assertEqual(calls, ["cpu"])
+        self.assertIn("cuda", err.getvalue())
+
+    def test_a_crashing_gpu_with_no_cpu_allowed_is_an_error_not_a_crash(self):
+        with mock.patch.object(kit, "_run", return_value={"device": "cuda"}), redirect_stderr(io.StringIO()):
+            with mock.patch.object(kit, "gpu_survives", return_value=False):
+                with self.assertRaisesRegex(RuntimeError, "every device"):
+                    kit.transcribe("x.mp4", device="cuda")
 
     def test_falls_back_to_cpu_when_the_gpu_fails_mid_run(self):
         calls = []
@@ -194,6 +214,44 @@ class TranscribeControlFlowTest(unittest.TestCase):
         with mock.patch("os.path.exists", return_value=False):
             with self.assertRaises(FileNotFoundError):
                 kit.transcribe("nope.mp4")
+
+
+class GpuProbeTest(unittest.TestCase):
+    """A broken GPU can kill the process outright (access violation), which no except can catch.
+
+    So the first GPU load happens in a throwaway child process.
+    """
+
+    def setUp(self):
+        kit._gpu_probes.clear()
+        self.addCleanup(kit._gpu_probes.clear)
+
+    def probe(self, **result):
+        done = mock.Mock(returncode=result.get("returncode", 0))
+        with mock.patch("subprocess.run", return_value=done, side_effect=result.get("raises")) as run:
+            with redirect_stderr(io.StringIO()):
+                return kit.gpu_survives("small", "float16"), run
+
+    def test_a_clean_exit_means_usable(self):
+        usable, run = self.probe(returncode=0)
+        self.assertTrue(usable)
+        command = run.call_args.args[0]
+        self.assertEqual(command[0], kit.sys.executable)
+        self.assertEqual(command[-2:], ["small", "float16"])
+
+    def test_a_crash_exit_code_means_unusable(self):
+        self.assertFalse(self.probe(returncode=3221225477)[0])
+
+    def test_a_hang_means_unusable(self):
+        import subprocess
+        self.assertFalse(self.probe(raises=subprocess.TimeoutExpired("python", 1))[0])
+
+    def test_the_answer_is_remembered_for_the_life_of_the_process(self):
+        done = mock.Mock(returncode=0)
+        with mock.patch("subprocess.run", return_value=done) as run:
+            kit.gpu_survives("small", "float16")
+            kit.gpu_survives("small", "float16")
+        self.assertEqual(run.call_count, 1)
 
 
 class CliTest(unittest.TestCase):

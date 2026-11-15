@@ -30,7 +30,7 @@ import json
 import os
 import sys
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 GPU_MODEL = "medium"
 CPU_MODEL = "small"
@@ -39,7 +39,9 @@ SENTENCE_END = (".", "?", "!", "。", "？", "！")
 EXIT_REFUSED = 3
 
 _models = {}
+_gpu_probes = {}
 _dll_dirs_exposed = False
+PROBE_FLAG = "--probe-gpu"
 
 
 class UnexpectedLanguageError(Exception):
@@ -85,6 +87,30 @@ def plan_attempts(model: str = "", device: str = "auto", compute_type: str = "")
         cpu_compute = compute_type if compute_type.startswith("int8") or compute_type == "float32" else "int8"
         attempts.append(("cpu", cpu_compute, model or CPU_MODEL))
     return attempts
+
+
+GPU_PROBE_TIMEOUT = 900  # seconds; the first run may have to download the model
+
+
+def gpu_survives(model: str, compute_type: str) -> bool:
+    """Load the model on the GPU in a throwaway child process and report whether it lived.
+
+    A broken driver or CUDA install can kill the process outright (Windows exit code
+    3221225477, an access violation) instead of raising, and no `except` catches that. Paying
+    for one extra load in a child turns that crash into an ordinary fallback to the CPU.
+    The answer is remembered for the life of this process.
+    """
+    key = (model, compute_type)
+    if key not in _gpu_probes:
+        import subprocess
+        command = [sys.executable, os.path.abspath(__file__), PROBE_FLAG, model, compute_type]
+        try:
+            done = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  timeout=GPU_PROBE_TIMEOUT)
+            _gpu_probes[key] = done.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            _gpu_probes[key] = False
+    return _gpu_probes[key]
 
 
 def load_model(name: str, device: str, compute_type: str):
@@ -311,6 +337,10 @@ def transcribe(
 
     last_error = None
     for dev, compute, model_name in plan_attempts(model, device, compute_type):
+        if dev == "cuda" and (model_name, dev, compute) not in _models and not gpu_survives(model_name, compute):
+            last_error = RuntimeError("the GPU crashed the test process while loading the model")
+            print(f"[whisper-kit] cuda failed, trying the next option: {last_error}", file=sys.stderr)
+            continue
         try:
             return _run(path, dev, compute, model_name, language=language, max_words=max_words, vad=vad,
                         vad_parameters=vad_parameters, traditional_chinese=traditional_chinese,
@@ -407,6 +437,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == [PROBE_FLAG]:  # internal: see gpu_survives
+        expose_nvidia_libraries()
+        load_model(argv[1], "cuda", argv[2])
+        return 0
     args = build_parser().parse_args(argv)
 
     def emit(prefix: str, payload: str) -> None:
